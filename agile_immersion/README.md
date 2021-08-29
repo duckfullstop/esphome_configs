@@ -2,6 +2,13 @@
 
 _Because Hot Water should be a lot, lot smarter than it is._
 
+
+**⚠️ IMPORTANT: WORKING WITH MAINS ELECTRICITY IS EXTREMELY DANGEROUS, ESPECIALLY WITH HIGH LOAD DEVICES SUCH AS IMMERSION HEATERS (AND THE SMALL TERMINALS OF THE 1PM). CONSULT A QUALIFIED ELECTRICIAN BEFORE ATTEMPTING THIS PROJECT!**
+
+**ENSURE GOOD CONNECTIONS ARE MADE WITH THE SMALL SCREW TERMINALS OF THE SHELLY - SHORTS ARE EXTREMELY EASY, ESPECIALLY WITH BRAIDED CABLE, AND YOU MAY WISH TO CONSIDER USING FERRULES. GOOD EARTHING BETWEEN ALL PARTS OF THIS CONFIGURATION ARE ESSENTIAL. FOLLOW APPROPRIATE ELECTRICAL CODE AND REGULATIONS FOR YOUR AREA. I AM NOT RESPONSIBLE FOR INJURY, LOSS OF PROPERTY, ILLNESS, DEATH, STOCK MARKET VOLATILITY, THE PRICE OF BITCOIN, OR THE STATE OF YOUR NEIGHBOUR'S BACK GARDEN IF YOU ATTEMPT THIS PROJECT.**
+
+___
+
 This project is designed to be used with Octopus Energy's _Agile_ tariff to run your hot water at _exactly_ the cheapest time, every night, **without fail.** (It can also be used if you're not on _Agile_ - indeed, it also works great on _Go_, _Go Faster_, and other Economy plans!)
 
 _"But duck."_, I hear you ask, _"why wouldn't I just use (insert other solution here)?"_
@@ -10,9 +17,7 @@ This particular solution has a raft of huge benefits over other implementations 
 
   * The call to heat is made by the ESP, _not_ remotely triggered by a remote instance. This means that **if your Home Assistant instance dies overnight for whatever reason, you will still have hot water the next day** - regardless of how long it is dead for.
   * This is a full replacement for your existing immersion heating circuitry - thanks to the raft of temperature sensors, you can **roughly estimate how much hot water you have remaining in the tank** - for example to trigger a notification so you don't end up taking a cold shower. Also, just _imagine_ the graph porn!
-  * Due to the temperature sensors, you can also set a desired target temperature remotely - meaning that with agile plans, you can **overheat water as an energy sink during negative price periods** (please read FAQ below)
-
-**⚠️ IMPORTANT: WORKING WITH MAINS ELECTRICITY IS EXTREMELY DANGEROUS, ESPECIALLY WITH HIGH LOAD DEVICES SUCH AS IMMERSION HEATERS (AND THE SMALL TERMINALS OF THE 1PM). CONSULT A QUALIFIED ELECTRICIAN BEFORE ATTEMPTING THIS PROJECT! ENSURE GOOD CONNECTIONS ARE MADE WITH THE SMALL SCREW TERMINALS OF THE SHELLY - SHORTS ARE EXTREMELY EASY, ESPECIALLY WITH BRAIDED CABLE, AND YOU MAY WISH TO CONSIDER USING FERRULES. GOOD EARTHING BETWEEN ALL PARTS OF THIS CONFIGURATION ARE ESSENTIAL. FOLLOW APPROPRIATE ELECTRICAL CODE AND REGULATIONS FOR YOUR AREA. I AM NOT RESPONSIBLE FOR INJURY, LOSS OF PROPERTY, DEATH, OR STOCK MARKET VOLATILITY IF YOU ATTEMPT THIS PROJECT.**
+  * Due to the temperature sensors, you can also set a desired target temperature remotely - meaning that with agile plans, you can **overheat water as an energy sink during negative price periods** (please read FAQ below
 
 **Hot water should be run occasionally to avoid the buildup of harmful bacteria. Don't leave the system completely off for extended periods.**
 
@@ -43,7 +48,7 @@ The configuration file has a couple of important things to point out:
 
 You should also set the `address`es of your temperature sensors appropriately - you can find out how to discover these in the [ESPHome documentation](https://esphome.io/components/sensor/dallas.html?highlight=dallas#getting-sensor-ids). 
 
-## Automation
+## Automation
 
 I have unfortunately lost the automation YAML that I used for popping notifications in HA - if you have some examples to contribute, please feel free to PR them in here.
 
