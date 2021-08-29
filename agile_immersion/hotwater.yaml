@@ -1,0 +1,307 @@
+substitutions:
+  name: "hotwater"
+  friendly_name: "Hot Water"
+  friendly_name_immersion: "Immersion Heater"
+  
+  # The default is to run at 4AM every morning if not otherwise scheduled.
+  autoheat_fallback_cron: "0 0 4 * * *"
+  
+  #autoheat_schedule_entity_id: input_datetime.immersion_heater_auto_run_time
+  autoheat_schedule_entity_id: sensor.octopus_hotwater_time
+
+esphome:
+  name: ${name}
+  platform: ESP8266
+  board: esp01_1m
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "ESPHome - ${friendly_name}"
+    password: !secret esphome_wifi_fallback_password
+
+# captive_portal:
+
+# Enable logging.
+logger:
+#  level: DEBUG
+
+# Enable Home Assistant API.
+api:
+  services:
+    - service: immersion_boost
+      then:
+        # It's time to run a requested boost.
+        - logger.log: 
+            format: 'Boost requested, engaging thermostat'
+            level: INFO
+        - climate.control:
+           id: "${name}_thermostat"
+           mode: HEAT
+        - homeassistant.event:
+            event: esphome.${name}.immersion
+            data:
+              event: 'moe.duck.esphome.immersion.boost.cyclestarted'
+
+# Enable over-the-air updates.
+ota:
+
+# Enable Web server. Useful for emergencies.
+web_server:
+  port: 80
+
+# Sync time with Home Assistant.
+time:
+  - platform: sntp
+    id: net_time
+    timezone: Europe/London
+    servers:
+      - "0.uk.pool.ntp.org"
+      - "1.uk.pool.ntp.org"
+      - "2.uk.pool.ntp.org"
+    on_time:
+      # Check whether it's time to do an immersion heater cycle.
+      - seconds: /1
+        then:
+          - if:
+              condition:
+                and:
+                  # Automode is on.
+                  - switch.is_on: immersion_auto
+                  # The time on the ESP is valid.
+                  - lambda: 'return id(net_time).utcnow().is_valid();'
+                  # The heat isn't already on (avoids any unlikely cases of double hits).
+                  - lambda: 'return id(${name}_thermostat).mode == CLIMATE_MODE_OFF;'
+                  # The set time in HA matches the auto run time.
+                  - text_sensor.state:
+                      id: immersion_auto_run_time
+                      # We choose to do this as a string lookup because it's cheaper to convert our local time to a string once
+                      # instead of converting the string time from the remote to an epoch timestamp.
+                      # (not benched, just guessing, either way is valid)
+                      state: !lambda 'return id(net_time).utcnow().strftime("%Y-%m-%d %H:%M:%S");'
+              then:
+                # It's time to run a HA-defined autoheat.
+                - logger.log: 
+                    format: 'Hit scheduled target time, engaging thermostat'
+                    level: INFO
+                - climate.control:
+                   id: "${name}_thermostat"
+                   mode: HEAT
+                - homeassistant.event:
+                    event: esphome.${name}.immersion
+                    data:
+                      event: 'moe.duck.esphome.immersion.autoheat.scheduled.cyclestarted'
+      - cron: ${autoheat_fallback_cron}
+        # seconds: /5
+        then:
+          - if:
+              condition:
+                and:
+                  # Automode is on.
+                  - switch.is_on: immersion_auto
+                  # The time on the ESP is valid.
+                  - lambda: 'return id(net_time).utcnow().is_valid();'
+                  # The heat isn't already on (avoids any unlikely cases of double hits).
+                  - lambda: 'return id(${name}_thermostat).mode == CLIMATE_MODE_OFF;'
+                  # The immersion heater run time cannot be relied upon today because of one of the following reasons:
+                  - or:
+                      # The immersion auto run time is not available for whatever reason.
+                      - text_sensor.state:
+                          id: immersion_auto_run_time
+                          state: ''
+                      # It has been more than 18 hours since the last update to the HA autoheat time (i.e we haven't received tonight's update)
+                      # This is far from optimised (there's C_TM's flying everywhere) but it should do for something that runs like once a day
+                      # Thanks to the esphome docs for to_c_tm(): https://esphome.io/api/structesphome_1_1time_1_1_e_s_p_time.html
+                      - lambda: |-
+                          struct tm current_time;
+                          struct tm autorun_time;
+                          current_time = id(net_time).utcnow().to_c_tm();
+                          strptime(id(immersion_auto_run_time).state.c_str(), "%Y-%m-%d %H:%M:%S", &autorun_time);
+                          return difftime(mktime(&current_time), mktime(&autorun_time)) > 64800;
+              then:
+                # We meet the conditions for a fallback autoheat.
+                - logger.log: 
+                    format: 'Hit scheduled fallback heat time and no new target time set, engaging thermostat'
+                    level: INFO
+                - climate.control:
+                   id: "${name}_thermostat"
+                   mode: HEAT
+                - homeassistant.event:
+                    event: esphome.${name}.immersion
+                    data:
+                      event: 'moe.duck.esphome.immersion.autoheat.fallback.cyclestarted'
+
+
+switch:
+  - platform: gpio
+    name: "${friendly_name_immersion}"
+    icon: "mdi:radiator"
+    pin: GPIO15
+    id: relay
+  - platform: template
+    name: "${friendly_name_immersion} - Schedule Active"
+    icon: "mdi:clock"
+    id: immersion_auto
+    restore_state: true
+    optimistic: true
+
+shelly_dallas:
+  pin_a: GPIO3
+  pin_b: GPIO0
+
+sensor:
+  - platform: shelly_dallas
+    address: 0xFE01203302FD4C28
+    name: "${friendly_name} Tank Temperature"
+    icon: mdi:water-boiler
+    id: ${name}_temp_tank
+    filters:
+    - filter_out: 85.0
+    on_value_range:
+        # Safety cut-out for tank overheat.
+        - above: 80.0
+          then:
+            - switch.turn_off: relay
+            - climate.control:
+                mode: "OFF"
+                id: "${name}_thermostat"
+  
+  - platform: shelly_dallas
+    address: 0x01011935FD4E5C28
+    name: "${friendly_name} Outflow Temperature"
+    icon: mdi:import
+    id: ${name}_temp_out
+    filters:
+    - filter_out: 85.0
+  - platform: shelly_dallas
+    address: 0x1301193CF512CB28
+    name: "${friendly_name} Inflow Temperature"
+    icon: mdi:export
+    id: ${name}_temp_in
+    filters:
+    - filter_out: 85.0
+  
+  - platform: wifi_signal
+    name: "${friendly_name} Signal"
+    update_interval: 60s
+    
+  - platform: hlw8012
+    cf_pin: GPIO05
+    cf1_pin: GPIO13 # not used because it is not available on the 1PM but it is needed to compile
+    sel_pin: GPIO14 # not used because it is not available on the 1PM but it is needed to compile
+    power:
+      name: "${friendly_name_immersion} Power"
+      unit_of_measurement: W
+      id: "${name}_power"
+      icon: mdi:flash
+      accuracy_decimals: 0
+      filters:
+      #Reading -> actual
+      - calibrate_linear:
+          - 2.5 -> 0.16
+          - 747.0 -> 125.0
+          - 1409.0 -> 237.0
+          - 2663.0 -> 444.0
+          - 8600.0 -> 1390.0
+      - lambda: if (x <= 6.0) return 0; else return (x - 6);
+      on_value_range:
+        # Safety cut-out for overpower.
+        - above: 3200
+          then:
+            - switch.turn_off: relay
+            - climate.control:
+                mode: "OFF"
+                id: "${name}_thermostat"
+    #voltage:
+    #  name: "${friendly_name_immersion} Voltage Test"
+    #  id: "${name}_voltage"
+    #  internal: true
+    update_interval: 10s
+    
+  # Total energy usage today
+  - platform: total_daily_energy
+    id: "${name}_energy"
+    name: "${friendly_name_immersion} Energy Used Today"
+    power_id: "${name}_power"
+    filters:
+      # Multiplication factor from W to kW is 0.001
+      - multiply: 0.001
+    unit_of_measurement: kWh
+    
+  # NTC Temperature
+  - platform: ntc
+    sensor: ${name}_resistance_sensor
+    name: "${friendly_name_immersion} Relay Temperature"
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    icon: mdi:thermometer-lines
+    calibration:
+      b_constant: 3350
+      reference_resistance: 10kOhm
+      reference_temperature: 298.15K
+  - platform: resistance
+    id: ${name}_resistance_sensor
+    sensor: ${name}_source_sensor
+    configuration: DOWNSTREAM
+    resistor: 32kOhm
+  - platform: adc
+    id: ${name}_source_sensor
+    pin: A0
+    update_interval: 10s
+
+binary_sensor:
+  - platform: status
+    name: "${friendly_name} Status"
+  # Binary sensor for the button press
+  - platform: gpio
+    name: "${friendly_name} Switch"
+    pin:
+      number: GPIO4
+    #on_state:
+    #  - switch.toggle: relay
+    #on_press:
+    #  - switch.turn_on: relay
+    #on_release:
+    #  - switch.turn_off: relay
+
+#status_led:
+#  pin: GPIO0
+
+text_sensor:
+  - platform: homeassistant
+    name: "${friendly_name_immersion} Run Time"
+    entity_id: ${autoheat_schedule_entity_id}
+    id: immersion_auto_run_time
+    
+climate:
+  - id: "${name}_thermostat"
+    name: "${friendly_name} Thermostat"
+    platform: thermostat
+    sensor: ${name}_temp_tank
+    default_target_temperature_low: 60
+    heat_action:
+      - switch.turn_on: relay
+    idle_action:
+      - switch.turn_off: relay
+      - if:
+         condition:
+           not:
+             - lambda: 'return id(${name}_thermostat).mode == CLIMATE_MODE_OFF;'
+         then:
+           - logger.log: 'Heater cycle finished, disengaging thermostat'
+           - climate.control:
+               # Turn climate off when we achieve the target temperature.
+               id: "${name}_thermostat"
+               mode: "OFF"
+           - homeassistant.event:
+               event: esphome.${name}.immersion
+               data:
+                 event: 'moe.duck.esphome.immersion.cyclefinished'
+    away_config:
+      default_target_temperature_low: 20
+    visual:
+      max_temperature: 70
+      temperature_step: 1
