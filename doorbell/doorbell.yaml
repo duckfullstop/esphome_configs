@@ -1,0 +1,146 @@
+esphome:
+  name: doorbell
+  platform: ESP8266
+  board: d1_mini_lite
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "PPCIoT - ${name}"
+    password: !secret esphome_wifi_fallback_password
+
+captive_portal:
+
+# Enable logging.
+logger:
+  baud_rate: 0
+
+# Enable Home Assistant API.
+api:
+
+# Enable over-the-air updates.
+ota:
+
+# Enable Web server.
+#web_server:
+#  port: 80
+
+# Sync time with Home Assistant.
+time:
+  - platform: sntp
+    id: net_time
+    timezone: Europe/London
+    servers:
+      - "0.pool.ntp.org"
+      - "1.pool.ntp.org"
+      - "2.pool.ntp.org"
+
+# Sensors with general information.
+sensor:
+  # Uptime sensor.
+  - platform: uptime
+    name: Doorbell Uptime
+
+  # WiFi Signal sensor.
+  - platform: wifi_signal
+    name: Doorbell WiFi Signal
+    update_interval: 60s
+
+# Global to store the on/off state of the chime
+globals:
+  - id: chime
+    type: bool
+    restore_value: true
+    initial_value: 'true'
+
+status_led:
+  pin: D4
+
+# Exposed switches.
+switch:
+  # Switch to restart the doorbell.
+  - platform: restart
+    name: Doorbell Restart
+
+  # Switch to turn on/off the chime.
+  - platform: gpio
+    id: relay
+    inverted: false
+    name: Doorbell Chime
+    pin: D1
+    
+  # Switch to play the doorbell sound.
+  - platform: template
+    name: Doorbell Melody
+    id: melody
+    restore_state: false
+    turn_on_action:
+      - dfplayer.set_device: TF_CARD
+      - dfplayer.set_volume: 20
+      - dfplayer.play: 1
+    turn_off_action:
+      - dfplayer.sleep
+
+  # Switch to turn on/off chime when
+  # doorbell button is pushed.
+  #
+  # It creates a "virtual" switch based
+  # on a global variable.
+  - platform: template
+    name: Doorbell Chime Active
+    id: chime_active
+    restore_state: false
+    turn_on_action:
+      - globals.set:
+          id: chime
+          value: 'true'
+    turn_off_action:
+      - globals.set:
+          id: chime
+          value: 'false'
+    lambda: |-
+      return id(chime);
+      
+uart:
+  tx_pin: D2
+  rx_pin: D3
+  baud_rate: 9600
+  
+dfplayer:
+  id: speaker
+  on_finished_playback:
+    if:
+      condition:
+        # The melody finished playing (in theory)
+        - switch.is_on: melody
+      then:
+        - switch.turn_off: melody
+  
+# Binary sensor representing the
+# Doorbell button push.
+binary_sensor:
+  - platform: gpio
+    id: button
+    name: Doorbell Button
+    pin:
+      number: D4
+      mode: INPUT_PULLUP
+      inverted: true
+    filters:
+      # Small filter, to debounce the button press.
+      - delayed_on: 50ms
+      - delayed_off: 5000ms
+    on_press:
+      # Only turn on the chime when it is active.
+      then:
+        if:
+          condition:
+            - switch.is_on: chime_active
+          then:
+              - switch.turn_on: melody
+              - switch.turn_on: relay
+              - delay: 350ms
+              - switch.turn_off: relay
