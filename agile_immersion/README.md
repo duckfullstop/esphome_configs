@@ -62,7 +62,7 @@ This whole setup is event driven, which avoids problems if you restart your HA i
 For tracking how much hot water you have left, simply use a template sensor - again, apologies that I've lost the YAML for this, but the short story is `((tank_temp - inlet_temp) / thermostat_target) * 100`. I find that warning at about 20% available is a good idea, though experiment for your own purposes.
 
 
-## FAQ
+## FAQ
 
  * Q: What's this about overheating my water?
    * A: If you're on Agile and experiencing a negative plunge price (i.e you're being paid to use electricity), you can really take advantage of the situation by turning on as much as humanly possible. Running this setup in combination with OctoBlock will already make the most of the deepest part of the plunge, but you might also want to consider setting the target temperature even higher, such as to use even more electricity (and make more profit). This isn't presently accounted for in the config, but you can either implement it here or have a Home Assistant automation adjust the maximum thermostat temperature.
