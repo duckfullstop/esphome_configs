@@ -1,0 +1,300 @@
+substitutions:
+  name: "powermon-evse"
+  friendly_name: "Power Monitor - EV Charger"
+  
+  # ZMAi-90 TuyaMCU datapoints
+  dp_switch: "16"
+  dp_total: "1"
+  dp_button: "12"
+  dp_rawdata: "6"
+
+esphome:
+  name: ${name}
+  platform: ESP8266
+  board: esp01_1m
+  # Restore switch states from flash because they're kinda important after power outages
+  esp8266_restore_from_flash: true
+
+external_components:
+  - source: github://dentra/esphome-components
+  - source: github://dentra/esphome@tuya-raw-fix-standalone
+    components: ["tuya"]
+    refresh: 6h
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  domain: ".leachnet"
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "LNIOT - ${name}"
+    password: !secret esphome_wifi_fallback_password
+
+captive_portal:
+
+logger:
+  esp8266_store_log_strings_in_flash: false
+  # Make sure logging is not using the serial port
+  baud_rate: 0
+
+# Enable Home Assistant API
+api:
+  reboot_timeout: 0s
+
+ota:
+
+# Enable Web server.
+web_server:
+  port: 80
+  
+time:
+  - platform: sntp
+    id: g_time
+    timezone: Europe/London
+    servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+    # Force update values from Tuya MCU every 10 seconds
+    on_time:
+      - seconds: 9,19,29,39,49,59
+        then:
+          - uart.write: [0x55, 0xaa, 0x00, 0x08, 0x00, 0x00, 0x07]
+      - seconds: 0
+        minutes: 30
+        hours: 0
+        then:
+          # Start of off-peak charging
+          if:
+            condition:
+              - switch.is_on: offpeak_charging
+            then:
+              - switch.turn_on: relay
+      - seconds: 0
+        minutes: 30
+        hours: 4
+        then:
+          # End of off-peak charging
+          if:
+            condition:
+              - switch.is_on: offpeak_charging
+            then:
+              - switch.turn_off: relay
+
+uart:
+  id: uart_bus
+  tx_pin: GPIO1
+  rx_pin: GPIO3
+  # data_bits: 8
+  # parity: NONE # Should this be EVEN?
+  # stop_bits: 1
+  baud_rate: 9600
+  
+# Register the Tuya MCU connection
+tuya:
+  time_id: g_time
+  on_datapoint_update:
+    - sensor_datapoint: ${dp_rawdata}
+      datapoint_type: raw
+      then:
+        - lambda: |-
+            id(voltage).publish_state((x[0] << 8 | x[1]) * 0.1);
+            id(current).publish_state((x[3] << 8 | x[4]) * 0.001);
+            id(power).publish_state((x[6] << 8 | x[7]) * 1);  
+    
+sensor:
+  - platform: wifi_signal
+    name: "${friendly_name} WiFi Signal"
+    update_interval: 60s
+  - platform: uptime
+    name: "${friendly_name} Uptime"
+
+  # total
+  - platform: "tuya"
+    id: total
+    name: "${friendly_name} - Energy Total"
+    sensor_datapoint: $dp_total
+    accuracy_decimals: 3
+    filters:
+      - multiply: 0.01
+    unit_of_measurement: "kWh"
+    icon: "mdi:sigma"
+    state_class: total_increasing
+    device_class: energy
+    # i am not interesting in total but tariffs, so you can comment or set it to false if you want internal total sensor
+    # internal: true
+
+  - platform: template
+    id: voltage
+    name: "${friendly_name} - Voltage"
+    unit_of_measurement: "V"
+    icon: "mdi:sine-wave"
+    device_class: voltage
+    state_class: measurement
+  - platform: template
+    id: current
+    name: "${friendly_name} - Current"
+    unit_of_measurement: "A"
+    icon: "mdi:current-ac"
+    device_class: current
+  - platform: template
+    id: power
+    name: "${friendly_name} - Active Power"
+    unit_of_measurement: "W"
+    icon: "mdi:flash"
+    device_class: power
+    state_class: measurement
+    on_value:
+      - if:
+          condition:
+            - switch.is_off: vehicle_present
+          then:
+            # Don't track power over session
+            - sensor.integration.reset: energy_session
+    on_value_range:
+      - above: 100
+        then:
+          - if:
+              condition:
+                - switch.is_on: vehicle_present
+                - binary_sensor.is_off: vehicle_charging
+              then:
+                # Pretty safe to say an EV is present
+                - binary_sensor.template.publish:
+                    id: vehicle_charging
+                    state: ON
+      - below: 100
+        then:
+            - if:
+                # The EV disconnected
+                condition:
+                  - binary_sensor.is_on: vehicle_charging
+                then:
+                  - binary_sensor.template.publish:
+                      id: vehicle_charging
+                      state: OFF
+
+  - platform: "energy_monitoring"
+    id: mon
+    power: power
+    voltage: voltage
+    current: current
+    apparent_power:
+      name: "${friendly_name} - Apparent Power"
+    reactive_power:
+      name: "${friendly_name} - Reactive Power"
+    power_factor:
+      name: "${friendly_name} - Power Factor"
+      device_class: power_factor
+
+  - platform: integration
+    id: energy_session
+    name: "${friendly_name} - Energy This Session"
+    sensor: power
+    time_unit: h
+    filters:
+      - multiply: 0.001
+    unit_of_measurement: "kWh"
+    icon: "mdi:power-plug"
+    state_class: total_increasing
+    device_class: energy
+
+switch:
+  - platform: "tuya"
+    id: relay
+    name: "${friendly_name} - Relay"
+    switch_datapoint: $dp_switch
+    icon: "mdi:power"
+  - platform: "gpio"
+    id: push_button
+    name: "${friendly_name} - Button"
+    internal: true
+    pin: 13
+    icon: "mdi:button"
+  - platform: template
+    name: "${friendly_name} - Vehicle Present"
+    id: vehicle_present
+    lambda: "return {};"
+    restore_state: true
+    optimistic: true
+    on_turn_on:
+      - then:
+          if:
+            condition:
+              - switch.is_on: offpeak_charging
+              # lambda is crappy but it works, doesn't understand toggling this switch on between 04:00 and 04:30
+              - or:
+                - lambda: return id(g_time).now().hour > 4;
+                - lambda: return id(g_time).now().hour == 0 && id(g_time).now().minute < 30;
+            then:
+              - switch.turn_off: relay
+            else:
+              - switch.turn_on: relay
+    on_turn_off:
+      - then:
+        # Car can't charge if it's not present (taps forehead)
+        - switch.turn_off: relay
+  - platform: template
+    name: "${friendly_name} - Off-Peak Charging"
+    id: offpeak_charging
+    lambda: "return {};"
+    restore_state: true
+    optimistic: true
+    on_turn_on:
+      - if:
+          condition:
+            - switch.is_on: vehicle_present
+          then:
+            if:
+              condition:
+                # lambda is crappy but it works, doesn't understand toggling this switch on between 04:00 and 04:30
+                - or:
+                  - lambda: return id(g_time).now().hour > 4;
+                  - lambda: return id(g_time).now().hour == 0 && id(g_time).now().minute < 30;
+              then:
+                - switch.turn_off: relay
+              else:
+                - switch.turn_on: relay
+          else:
+            - switch.turn_off: relay
+    on_turn_off:
+      - if:
+          condition:
+            - switch.is_on: vehicle_present
+          then:
+            - switch.turn_on: relay
+          
+
+binary_sensor:
+  - platform: template
+    name: "${friendly_name} - Vehicle Charging"
+    id: vehicle_charging
+    device_class: battery_charging
+    filters:
+      - delayed_off: 120s
+    on_press:
+      - then:
+        - sensor.integration.reset: energy_session
+        - homeassistant.event: 
+            event: esphome.evse_charge_start
+    on_release:
+      - then:
+        - homeassistant.event:
+            event: esphome.evse_charge_end
+            data:
+              energy: !lambda "return id(energy_session).state;"
+
+  - platform: status
+    name: "${friendly_name} - Status"
+  # Binary sensor for the button press
+  - platform: "tuya"
+    name: "${friendly_name} - Button"
+    sensor_datapoint: $dp_button
+    on_state:
+      - switch.toggle: vehicle_present
+      
+
+status_led:
+  pin: 
+    number: GPIO4
+    inverted: true
